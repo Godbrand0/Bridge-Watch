@@ -21,6 +21,7 @@ import AssetFilterPanel from "../components/Filters/AssetFilterPanel";
 import { useFavorites } from "../hooks/useFavorites";
 import ExportPickerDialog from "../components/ExportPickerDialog";
 import { Tabs, TabList, Tab, TabPanel } from "../components/Tabs";
+import { RecentActivityTimeline } from "../components/timeline";
 import type { AssetWithHealth, FilterStatus } from "../types";
 
 type DashboardView = "overview" | "assets" | "bridges";
@@ -394,6 +395,16 @@ export default function Dashboard() {
       {showAssets ? <WatchlistWidget /> : null}
 
       {showAssets ? <ExternalDependencyPanel /> : null}
+
+      {/* Recent Activity Timeline */}
+      <section>
+        <RecentActivityTimeline
+          maxEvents={50}
+          defaultMode="compact"
+          showFilters={true}
+          showHeader={true}
+        />
+      </section>
 
       {showBridges ? (
         <section>
