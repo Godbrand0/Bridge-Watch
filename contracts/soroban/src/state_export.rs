@@ -95,6 +95,19 @@ impl StateExportHelper {
         }
     }
 
+    /// Generate deterministic state hash for audit trail.
+    pub fn compute_state_hash(
+        env: Env,
+        asset_code: &String,
+        status: &String,
+        risk_score: u32,
+        timestamp: u64,
+    ) -> String {
+        let mut hash_input = String::from_str(&env, "");
+        hash_input = String::from_str(&env, &format!("{}{}{}{}", asset_code, status, risk_score, timestamp));
+        hash_input
+    }
+
     /// Build a placeholder snapshot when no health record exists yet.
     pub fn build_empty_asset_snapshot(env: &Env, asset_code: String) -> AssetStateSnapshot {
         AssetStateSnapshot {

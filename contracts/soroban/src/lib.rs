@@ -24,7 +24,6 @@ pub mod reputation_system;
 pub mod source_trust;
 pub mod migration;
 pub mod state_export;
-
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Vec,
 };
@@ -37,7 +36,6 @@ use liquidity_pool::{
     DailyBucket, ImpermanentLossResult, LiquidityDepth as PoolLiquidityDepth, PoolMetrics,
     PoolSnapshot, PoolType,
 };
-
 // Storage key constants instead of using DataKey enum for storage operations
 mod keys {
     pub const ADMIN: &str = "admin";
@@ -1065,6 +1063,7 @@ pub enum HealthSourceDataKey {
 // ---------------------------------------------------------------------------
 // Admin Activity Service types (issue #299)
 // ---------------------------------------------------------------------------
+>>>>>>> upstream/main
 
 /// Categories of admin actions captured by the activity log.
 #[contracttype]
@@ -1201,7 +1200,6 @@ impl BridgeWatchContract {
         price_stability_score: u32,
         bridge_uptime_score: u32,
     ) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
         
         // Check if caller is a trusted source (if any sources are registered)
@@ -1254,7 +1252,6 @@ impl BridgeWatchContract {
     /// `HealthSubmitter`. Accepts up to 20 records per call, all stamped with
     /// the same ledger timestamp. A `health_up` event is emitted per asset.
     pub fn submit_health_batch(env: Env, caller: Address, records: Vec<HealthScoreBatch>) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
 
         if records.len() > 20 {
@@ -1322,7 +1319,6 @@ impl BridgeWatchContract {
         price: i128,
         source: String,
     ) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::PriceSubmitter);
         
         // Check if caller is a trusted source (if any sources are registered)
@@ -5016,6 +5012,401 @@ impl BridgeWatchContract {
             panic!("asset monitoring is paused");
         }
     }
+
+    fn tier_rank(tier: &StatusTier) -> u32 {
+
+        match tier {
+
+            StatusTier::Ok => 0,
+
+            StatusTier::Low => 1,
+
+            StatusTier::Medium => 2,
+
+            StatusTier::High => 3,
+
+        }
+
+    }
+
+
+    fn max_tier(a: StatusTier, b: StatusTier) -> StatusTier {
+
+        if Self::tier_rank(&a) >= Self::tier_rank(&b) {
+
+            a
+
+        } else {
+
+            b
+
+        }
+
+    }
+
+
+    fn health_to_tier(score: u32) -> StatusTier {
+
+        if score >= 80 {
+
+            StatusTier::Ok
+
+        } else if score >= 60 {
+
+            StatusTier::Low
+
+        } else if score >= 40 {
+
+            StatusTier::Medium
+
+        } else {
+
+            StatusTier::High
+
+        }
+
+    }
+
+
+    fn deviation_to_tier(alert: &Option<DeviationAlert>) -> (bool, StatusTier) {
+
+        match alert {
+
+            None => (false, StatusTier::Ok),
+
+            Some(a) => match a.severity {
+
+                DeviationSeverity::Low => (true, StatusTier::Low),
+
+                DeviationSeverity::Medium => (true, StatusTier::Medium),
+
+                DeviationSeverity::High => (true, StatusTier::High),
+
+            },
+
+        }
+
+    }
+
+
+    fn compute_contract_tier_from_counts(rollup: &ContractStatusRollup) -> StatusTier {
+
+        if rollup.asset_high > 0 || rollup.bridge_high > 0 {
+
+            StatusTier::High
+
+        } else if rollup.asset_medium > 0 || rollup.bridge_medium > 0 {
+
+            StatusTier::Medium
+
+        } else if rollup.asset_low > 0 || rollup.bridge_low > 0 {
+
+            StatusTier::Low
+
+        } else {
+
+            StatusTier::Ok
+
+        }
+
+    }
+
+
+    fn bump_contract_counts_for_asset(env: &Env, prev: Option<StatusTier>, next: StatusTier) {
+
+        let mut rollup: ContractStatusRollup = env
+
+            .storage()
+
+            .persistent()
+
+            .get(&DataKey::ContractStatusRollup)
+
+            .unwrap_or(ContractStatusRollup {
+
+                tier: StatusTier::Ok,
+
+                asset_ok: 0,
+
+                asset_low: 0,
+
+                asset_medium: 0,
+
+                asset_high: 0,
+
+                bridge_ok: 0,
+
+                bridge_low: 0,
+
+                bridge_medium: 0,
+
+                bridge_high: 0,
+
+                timestamp: env.ledger().timestamp(),
+
+            });
+
+
+        if let Some(p) = prev {
+
+            match p {
+
+                StatusTier::Ok => rollup.asset_ok = rollup.asset_ok.saturating_sub(1),
+
+                StatusTier::Low => rollup.asset_low = rollup.asset_low.saturating_sub(1),
+
+                StatusTier::Medium => rollup.asset_medium = rollup.asset_medium.saturating_sub(1),
+
+                StatusTier::High => rollup.asset_high = rollup.asset_high.saturating_sub(1),
+
+            }
+
+        }
+
+
+        match next {
+
+            StatusTier::Ok => rollup.asset_ok += 1,
+
+            StatusTier::Low => rollup.asset_low += 1,
+
+            StatusTier::Medium => rollup.asset_medium += 1,
+
+            StatusTier::High => rollup.asset_high += 1,
+
+        }
+
+
+        rollup.tier = Self::compute_contract_tier_from_counts(&rollup);
+
+        rollup.timestamp = env.ledger().timestamp();
+
+
+        env.storage()
+
+            .persistent()
+
+            .set(&DataKey::ContractStatusRollup, &rollup);
+
+
+        env.events().publish((symbol_short!("ctr_st"),), rollup.tier.clone());
+
+    }
+
+
+    fn bump_contract_counts_for_bridge(env: &Env, prev: Option<StatusTier>, next: StatusTier) {
+
+        let mut rollup: ContractStatusRollup = env
+
+            .storage()
+
+            .persistent()
+
+            .get(&DataKey::ContractStatusRollup)
+
+            .unwrap_or(ContractStatusRollup {
+
+                tier: StatusTier::Ok,
+
+                asset_ok: 0,
+
+                asset_low: 0,
+
+                asset_medium: 0,
+
+                asset_high: 0,
+
+                bridge_ok: 0,
+
+                bridge_low: 0,
+
+                bridge_medium: 0,
+
+                bridge_high: 0,
+
+                timestamp: env.ledger().timestamp(),
+
+            });
+
+
+        if let Some(p) = prev {
+
+            match p {
+
+                StatusTier::Ok => rollup.bridge_ok = rollup.bridge_ok.saturating_sub(1),
+
+                StatusTier::Low => rollup.bridge_low = rollup.bridge_low.saturating_sub(1),
+
+                StatusTier::Medium => rollup.bridge_medium = rollup.bridge_medium.saturating_sub(1),
+
+                StatusTier::High => rollup.bridge_high = rollup.bridge_high.saturating_sub(1),
+
+            }
+
+        }
+
+
+        match next {
+
+            StatusTier::Ok => rollup.bridge_ok += 1,
+
+            StatusTier::Low => rollup.bridge_low += 1,
+
+            StatusTier::Medium => rollup.bridge_medium += 1,
+
+            StatusTier::High => rollup.bridge_high += 1,
+
+        }
+
+
+        rollup.tier = Self::compute_contract_tier_from_counts(&rollup);
+
+        rollup.timestamp = env.ledger().timestamp();
+
+
+        env.storage()
+
+            .persistent()
+
+            .set(&DataKey::ContractStatusRollup, &rollup);
+
+
+        env.events().publish((symbol_short!("ctr_st"),), rollup.tier.clone());
+
+    }
+
+
+    fn update_asset_rollup(env: &Env, asset_code: &String) {
+
+        let health = Self::load_asset_health(env, asset_code);
+
+        let deviation: Option<DeviationAlert> = env
+
+            .storage()
+
+            .persistent()
+
+            .get(&DataKey::DeviationAlert(asset_code.clone()));
+
+
+        let health_tier = Self::health_to_tier(health.health_score);
+
+        let (has_alert, deviation_tier) = Self::deviation_to_tier(&deviation);
+
+        let mut tier = Self::max_tier(health_tier, deviation_tier.clone());
+
+
+        if !health.active {
+
+            tier = Self::max_tier(tier, StatusTier::Low);
+
+        }
+
+        if health.paused {
+
+            tier = Self::max_tier(tier, StatusTier::Low);
+
+        }
+
+
+        let prev: Option<AssetStatusRollup> = env
+
+            .storage()
+
+            .persistent()
+
+            .get(&DataKey::AssetStatusRollup(asset_code.clone()));
+
+        let prev_tier = prev.as_ref().map(|r| r.tier.clone());
+
+
+        let rollup = AssetStatusRollup {
+
+            asset_code: asset_code.clone(),
+
+            tier: tier.clone(),
+
+            health_score: health.health_score,
+
+            has_price_deviation_alert: has_alert,
+
+            price_deviation_tier: deviation_tier,
+
+            paused: health.paused,
+
+            active: health.active,
+
+            timestamp: env.ledger().timestamp(),
+
+        };
+
+
+        env.storage()
+
+            .persistent()
+
+            .set(&DataKey::AssetStatusRollup(asset_code.clone()), &rollup);
+
+
+        Self::bump_contract_counts_for_asset(env, prev_tier, tier.clone());
+
+        env.events().publish((symbol_short!("asset_st"), asset_code.clone()), tier);
+
+    }
+
+
+    fn update_bridge_rollup(env: &Env, bridge_id: &String, mismatch_bps: i128, is_critical: bool) {
+
+        let tier = if is_critical {
+
+            StatusTier::High
+
+        } else {
+
+            StatusTier::Ok
+
+        };
+
+
+        let prev: Option<BridgeStatusRollup> = env
+
+            .storage()
+
+            .persistent()
+
+            .get(&DataKey::BridgeStatusRollup(bridge_id.clone()));
+
+        let prev_tier = prev.as_ref().map(|r| r.tier.clone());
+
+
+        let rollup = BridgeStatusRollup {
+
+            bridge_id: bridge_id.clone(),
+
+            tier: tier.clone(),
+
+            latest_mismatch_bps: mismatch_bps,
+
+            is_critical,
+
+            timestamp: env.ledger().timestamp(),
+
+        };
+
+
+        env.storage()
+
+            .persistent()
+
+            .set(&DataKey::BridgeStatusRollup(bridge_id.clone()), &rollup);
+
+
+        Self::bump_contract_counts_for_bridge(env, prev_tier, tier.clone());
+
+        env.events().publish((symbol_short!("bridge_st"), bridge_id.clone()), tier);
+
+    }
+
     // -----------------------------------------------------------------------
     // Liquidity Pool Monitor
     // -----------------------------------------------------------------------
@@ -5251,7 +5642,6 @@ impl BridgeWatchContract {
         bridge_uptime_score: u32,
         manual_override: Option<u32>,
     ) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
         let status = Self::load_asset_health(&env, &asset_code);
         Self::assert_asset_accepting_submissions(&status);
@@ -5390,6 +5780,7 @@ impl BridgeWatchContract {
     pub fn get_risk_score_config(env: Env) -> RiskScoreConfig {
         Self::load_risk_score_config(&env)
     }
+}
 
     /// Pure deterministic calculation for the composite risk score.
     ///
@@ -8531,7 +8922,6 @@ mod tests {
 
         env.ledger().set_timestamp(200);
         client.record_supply_mismatch(&bridge, &asset, &1_000_000, &1_002_000);
-
         env.ledger().set_timestamp(500);
         client.record_supply_mismatch(&bridge, &asset, &1_000_000, &1_003_000);
 
